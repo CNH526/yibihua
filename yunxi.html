@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>一笔画绘图工具</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: Arial, sans-serif;
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* 左侧工具栏 */
+    #toolbar {
+      width: 80px;
+      background-color: #f0f0f0;
+      border-right: 1px solid #ccc;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding-top: 10px;
+    }
+
+    .tool-btn {
+      width: 60px;
+      height: 60px;
+      margin-bottom: 10px;
+      cursor: pointer;
+      border-radius: 5px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 2px;
+      transition: all 0.2s ease;
+      background-color: white;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .tool-btn:hover {
+      background-color: #e0e0e0;
+    }
+
+    .tool-btn.active {
+      background-color: red;
+      color: white;
+    }
+
+    .tool-text {
+      font-size: 12px;
+      font-weight: bold;
+      margin: 0;
+    }
+
+    /* 画布区域 */
+    #canvas-container {
+      flex-grow: 1;
+      position: relative;
+      background-color: #eee;
+      cursor: crosshair;
+    }
+
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+  </style>
+</head>
+<body>
+
+<div id="toolbar">
+  <div class="tool-btn active" data-tool="point">
+    <span>📍</span>
+    <span class="tool-text">画点</span>
+  </div>
+  
+  <div class="tool-btn" data-tool="line">
+    <span>📏</span>
+    <span class="tool-text">画线</span>
+  </div>
+  
+  <div class="tool-btn" data-tool="eraser">
+    <span>🧽</span>
+    <span class="tool-text">橡皮擦</span>
+  </div>
+</div>
+
+<div id="canvas-container">
+  <canvas id="drawing-canvas"></canvas>
+</div>
+
+<script>
+  // === 初始化变量 ===
+  const canvas = document.getElementById('drawing-canvas');
+  const ctx = canvas.getContext('2d');
+
+  let points = []; // 存储所有点 {x, y}
+  let lines = []; // 存储所有线段 [{start, end}, ...] start/end 是 point 对象
+  let currentTool = 'point'; // 当前工具: 'point', 'line', 'eraser'
+  let isDrawingLine = false; // 是否处于画线状态
+  let lineStartPoint = null; // 当前线段起点
+  let previewLineEnd = null; // 预览线终点（鼠标当前位置）
+  let snapThreshold = 30; // 吸附距离阈值
+  let curveOffset = 0; // 当前曲线偏移方向（+1/-1）
+  let offsetStep = 20; // 偏移单位像素
+
+  // 设置画布尺寸
+  function resizeCanvas() {
+    const container = document.getElementById('canvas-container');
+    canvas.width = container.clientWidth;
+    canvas.height = container.clientHeight;
+    redraw();
+  }
+
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas(); // 初始化
+
+  // === 工具切换逻辑 ===
+  document.querySelectorAll('.tool-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentTool = btn.dataset.tool;
+
+      if (currentTool !== 'line') {
+        isDrawingLine = false;
+        lineStartPoint = null;
+        previewLineEnd = null;
+      }
+    });
+  });
+
+  // === 获取鼠标坐标 ===
+  function getMousePos(e) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top
+    };
+  }
+
+  // === 判断点是否在范围内 ===
+  function isInSnapRange(p1, p2) {
+    const dx = p1.x - p2.x;
+    const dy = p1.y - p2.y;
+    return Math.sqrt(dx*dx + dy*dy) <= snapThreshold;
+  }
+
+  // === 获取最近点 ===
+  function findClosestPoint(mousePos) {
+    for (let i = 0; i < points.length; i++) {
+      if (isInSnapRange(mousePos, points[i])) {
+        return points[i];
+      }
+    }
+    return null;
+  }
+
+  // === 绘制点 ===
+  function drawPoint(point) {
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#ff0000';
+    ctx.fill();
+  }
+
+  // === 绘制线段 ===
+  function drawLine(line, isPreview = false) {
+    const start = line.start;
+    const end = line.end;
+
+    // 计算控制点（用于弯曲效果）
+    const midX = (start.x + end.x) / 2;
+    const midY = (start.y + end.y) / 2;
+
+    // 偏移控制点以形成曲线
+    const offsetX = (end.y - start.y) * curveOffset;
+    const offsetY = -(end.x - start.x) * curveOffset;
+
+    const controlX = midX + offsetX;
+    const controlY = midY + offsetY;
+
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.quadraticCurveTo(controlX, controlY, end.x, end.y);
+
+    // 预览线使用灰色，正式线使用黑色
+    ctx.strokeStyle = isPreview ? '#cccccc' : '#000000';
+    ctx.lineWidth = isPreview ? 1 : 2;
+    ctx.stroke();
+
+    // 重置偏移方向
+    curveOffset *= -1;
+  }
+
+  // === 清除画布并重绘所有内容 ===
+  function redraw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // 绘制所有线
+    lines.forEach(l => drawLine(l));
+
+    // 绘制所有点
+    points.forEach(p => drawPoint(p));
+
+    // 绘制预览线（如果有）
+    if (previewLineEnd && lineStartPoint && isDrawingLine) {
+      drawLine({
+        start: lineStartPoint,
+        end: previewLineEnd
+      }, true); // 第二个参数表示这是预览线
+    }
+  }
+
+  // === 添加新点 ===
+  function addPoint(x, y) {
+    // 只有在点模式下才能画点
+    if (currentTool === 'point') {
+      points.push({x, y});
+      redraw();
+    }
+  }
+
+  // === 添加新线 ===
+  function addLine(start, end) {
+    // 只有在线模式下才能画线
+    if (currentTool === 'line') {
+      lines.push({start, end});
+      redraw();
+    }
+  }
+
+  // === 删除点及关联线 ===
+  function deletePointAndLines(targetPoint) {
+    // 删除点
+    points = points.filter(p => !(p.x === targetPoint.x && p.y === targetPoint.y));
+    // 删除与此点相关的线
+    lines = lines.filter(l => l.start !== targetPoint && l.end !== targetPoint);
+    redraw();
+  }
+
+  // === 删除线段 ===
+  function deleteLineAtPosition(pos) {
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i];
+      const d = distanceFromPointToLineSegment(pos, l.start, l.end);
+      if (d < 5) {
+        lines.splice(i, 1); // 删除这条线
+        redraw();
+        break;
+      }
+    }
+  }
+
+  // === 点到线段的距离计算 ===
+  function distanceFromPointToLineSegment(P, A, B) {
+    const AP = {x: P.x - A.x, y: P.y - A.y};
+    const AB = {x: B.x - A.x, y: B.y - A.y};
+
+    const ab2 = AB.x * AB.x + AB.y * AB.y;
+    const ap_ab = AP.x * AB.x + AP.y * AB.y;
+
+    let t = ap_ab / ab2;
+    t = Math.max(0, Math.min(1, t)); // 截断到 [0,1]
+
+    const closest = {
+      x: A.x + t * AB.x,
+      y: A.y + t * AB.y
+    };
+
+    const dist = Math.sqrt(
+      (P.x - closest.x)**2 +
+      (P.y - closest.y)**2
+    );
+
+    return dist;
+  }
+
+  // === 鼠标按下事件 ===
+  canvas.addEventListener('mousedown', (e) => {
+    const mousePos = getMousePos(e);
+
+    switch(currentTool) {
+      case 'point':
+        addPoint(mousePos.x, mousePos.y);
+        break;
+
+      case 'line':
+        if (!isDrawingLine) {
+          const snapped = findClosestPoint(mousePos);
+          if (snapped) {
+            lineStartPoint = snapped;
+            isDrawingLine = true;
+          } else {
+            addPoint(mousePos.x, mousePos.y);
+            lineStartPoint = {x: mousePos.x, y: mousePos.y};
+            isDrawingLine = true;
+          }
+        } else {
+          const snapped = findClosestPoint(mousePos);
+          if (snapped) {
+            addLine(lineStartPoint, snapped);
+          } else {
+            addPoint(mousePos.x, mousePos.y);
+            addLine(lineStartPoint, {x: mousePos.x, y: mousePos.y});
+          }
+          isDrawingLine = false;
+          lineStartPoint = null;
+          previewLineEnd = null; // 清除预览
+        }
+        break;
+
+      case 'eraser':
+        const clickedPoint = findClosestPoint(mousePos);
+        if (clickedPoint) {
+          deletePointAndLines(clickedPoint);
+        } else {
+          deleteLineAtPosition(mousePos);
+        }
+        break;
+    }
+  });
+
+  // === 鼠标移动事件 ===
+  canvas.addEventListener('mousemove', (e) => {
+    const mousePos = getMousePos(e);
+
+    if (currentTool === 'line' && isDrawingLine) {
+      previewLineEnd = mousePos;
+      redraw();
+    }
+  });
+
+  // === 鼠标抬起事件 ===
+  canvas.addEventListener('mouseup', () => {
+    if (currentTool === 'line' && isDrawingLine) {
+      // 如果没有吸附，则取消画线
+      if (!findClosestPoint(previewLineEnd)) {
+        isDrawingLine = false;
+        lineStartPoint = null;
+        previewLineEnd = null;
+        redraw();
+      }
+    }
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,427 @@
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>交互式点线绘制工具</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button.active {
+            background-color: #2e7d32;
+            box-shadow: 0 0 0 2px white, 0 0 0 4px #2e7d32;
+        }
+        #canvasContainer {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+        canvas {
+            width: 100%;
+            height: auto;
+            cursor: crosshair;
+        }
+        #eraserBtn {
+            background-color: #f44336;
+        }
+        #eraserBtn:hover {
+            background-color: #d32f2f;
+        }
+        #eraserBtn.active {
+            background-color: #b71c1c;
+            box-shadow: 0 0 0 2px white, 0 0 0 4px #b71c1c;
+        }
+        #clearBtn {
+            background-color: #ff9800;
+        }
+        #clearBtn:hover {
+            background-color: #f57c00;
+        }
+        .tool-description {
+            text-align: center;
+            color: #666;
+            margin-top: 5px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>交互式点线绘制工具</h1>
+        <div class="controls">
+            <button id="pointTool" class="active">点工具</button>
+            <button id="lineTool">连线工具</button>
+            <button id="eraserBtn">橡皮擦</button>
+            <button id="clearBtn">清除画布</button>
+        </div>
+        <p class="tool-description">当前工具: 点工具 (点击画布添加点)</p>
+        <div id="canvasContainer">
+            <canvas id="drawingCanvas" width="1000" height="600"></canvas>
+        </div>
+    </div>
+
+    <script>
+        // 获取DOM元素
+        const canvas = document.getElementById('drawingCanvas');
+        const ctx = canvas.getContext('2d');
+        const pointToolBtn = document.getElementById('pointTool');
+        const lineToolBtn = document.getElementById('lineTool');
+        const eraserBtn = document.getElementById('eraserBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const toolDescription = document.querySelector('.tool-description');
+
+        // 工具状态
+        let currentTool = 'point'; // 'point', 'line', 'eraser'
+        
+        // 数据存储
+        const points = []; // 存储点 {x, y, radius}
+        const lines = [];  // 存储线 {startPoint, endPoint}
+        
+        // 连线状态
+        let isDrawingLine = false;
+        let startPoint = null;
+        let previewLine = null;
+        
+        // 点的样式
+        const pointRadius = 6;
+        const pointColor = '#3498db';
+        const selectedPointColor = '#e74c3c';
+        
+        // 线的样式
+        const lineColor = '#2c3e50';
+        const lineWidth = 2;
+        const previewLineColor = '#95a5a6';
+        const previewLineWidth = 1;
+        
+        // 初始化画布
+        function initCanvas() {
+            // 设置画布背景
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // 添加事件监听
+            canvas.addEventListener('click', handleCanvasClick);
+            canvas.addEventListener('mousemove', handleMouseMove);
+            canvas.addEventListener('mousedown', handleMouseDown);
+            canvas.addEventListener('mouseup', handleMouseUp);
+            
+            // 工具按钮事件
+            pointToolBtn.addEventListener('click', () => setTool('point'));
+            lineToolBtn.addEventListener('click', () => setTool('line'));
+            eraserBtn.addEventListener('click', () => setTool('eraser'));
+            clearBtn.addEventListener('click', clearCanvas);
+        }
+        
+        // 设置当前工具
+        function setTool(tool) {
+            currentTool = tool;
+            isDrawingLine = false;
+            startPoint = null;
+            previewLine = null;
+            
+            // 更新按钮状态
+            pointToolBtn.classList.remove('active');
+            lineToolBtn.classList.remove('active');
+            eraserBtn.classList.remove('active');
+            
+            switch(tool) {
+                case 'point':
+                    pointToolBtn.classList.add('active');
+                    toolDescription.textContent = '当前工具: 点工具 (点击画布添加点)';
+                    canvas.style.cursor = 'crosshair';
+                    break;
+                case 'line':
+                    lineToolBtn.classList.add('active');
+                    toolDescription.textContent = '当前工具: 连线工具 (点击两个点创建连线)';
+                    canvas.style.cursor = 'crosshair';
+                    break;
+                case 'eraser':
+                    eraserBtn.classList.add('active');
+                    toolDescription.textContent = '当前工具: 橡皮擦 (点击删除点或线)';
+                    canvas.style.cursor = 'url("data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'24\' height=\'24\' viewBox=\'0 0 24 24\' fill=\'%23f44336\'%3E%3Cpath d=\'M18.5 2.08l1.42 1.42L15.17 7.05 13.76 5.64 18.5 2.08zm-1.76 2.68L14.34 6.36l-1.42-1.42-4.24 4.24 1.42 1.42L16.74 4.76zM3 17.25V21h3.75L17.81 9.93l-3.75-3.75L3 17.25z\'/%3E%3C/svg%3E") 12 12, auto';
+                    break;
+            }
+            
+            redraw();
+        }
+        
+        // 获取鼠标在画布上的位置
+        function getMousePosition(event) {
+            const rect = canvas.getBoundingClientRect();
+            return {
+                x: Math.round(event.clientX - rect.left),
+                y: Math.round(event.clientY - rect.top)
+            };
+        }
+        
+        // 寻找吸附点
+        function getAdsorbPoint(position) {
+            const threshold = 15; // 吸附阈值
+            
+            for (let i = 0; i < points.length; i++) {
+                const distance = Math.hypot(
+                    position.x - points[i].x,
+                    position.y - points[i].y
+                );
+                
+                if (distance < threshold) {
+                    return points[i];
+                }
+            }
+            
+            return null;
+        }
+        
+        // 处理画布点击事件
+        function handleCanvasClick(event) {
+            const mousePos = getMousePosition(event);
+            
+            switch(currentTool) {
+                case 'point':
+                    // 添加新点
+                    points.push({
+                        x: mousePos.x,
+                        y: mousePos.y,
+                        radius: pointRadius
+                    });
+                    redraw();
+                    break;
+                    
+                case 'line':
+                    const adsorbPoint = getAdsorbPoint(mousePos);
+                    
+                    if (!isDrawingLine && adsorbPoint) {
+                        // 开始绘制线 - 选择起点
+                        isDrawingLine = true;
+                        startPoint = adsorbPoint;
+                    } else if (isDrawingLine && adsorbPoint && adsorbPoint !== startPoint) {
+                        // 完成绘制线 - 选择终点
+                        isDrawingLine = false;
+                        
+                        // 检查线是否已存在
+                        const lineExists = lines.some(line => 
+                            (line.startPoint === startPoint && line.endPoint === adsorbPoint) ||
+                            (line.startPoint === adsorbPoint && line.endPoint === startPoint)
+                        );
+                        
+                        if (!lineExists) {
+                            // 避免线重叠 - 平行偏移
+                            let offsetX = 0;
+                            let offsetY = 0;
+                            
+                            // 检查是否有相同的点对
+                            const samePointsLines = lines.filter(line => 
+                                (line.startPoint === startPoint && line.endPoint === adsorbPoint) ||
+                                (line.startPoint === adsorbPoint && line.endPoint === startPoint)
+                            );
+                            
+                            if (samePointsLines.length > 0) {
+                                // 计算线的方向向量
+                                const dx = adsorbPoint.x - startPoint.x;
+                                const dy = adsorbPoint.y - startPoint.y;
+                                
+                                // 计算垂直方向的单位向量
+                                const length = Math.sqrt(dx * dx + dy * dy);
+                                if (length > 0) {
+                                    const perpX = -dy / length;
+                                    const perpY = dx / length;
+                                    
+                                    // 根据已有线的数量计算偏移量
+                                    const offsetDistance = 5 * samePointsLines.length;
+                                    offsetX = perpX * offsetDistance;
+                                    offsetY = perpY * offsetDistance;
+                                }
+                            }
+                            
+                            // 添加新线
+                            lines.push({
+                                startPoint: { ...startPoint, x: startPoint.x + offsetX, y: startPoint.y + offsetY },
+                                endPoint: { ...adsorbPoint, x: adsorbPoint.x + offsetX, y: adsorbPoint.y + offsetY }
+                            });
+                        }
+                        
+                        startPoint = null;
+                        previewLine = null;
+                        redraw();
+                    }
+                    break;
+                    
+                case 'eraser':
+                    // 尝试删除点
+                    const pointIndex = points.findIndex(point => 
+                        Math.hypot(mousePos.x - point.x, mousePos.y - point.y) < point.radius + 10
+                    );
+                    
+                    if (pointIndex !== -1) {
+                        const deletedPoint = points.splice(pointIndex, 1)[0];
+                        
+                        // 删除与该点相关的线
+                        for (let i = lines.length - 1; i >= 0; i--) {
+                            if (lines[i].startPoint === deletedPoint || lines[i].endPoint === deletedPoint) {
+                                lines.splice(i, 1);
+                            }
+                        }
+                        
+                        redraw();
+                        return;
+                    }
+                    
+                    // 尝试删除线
+                    for (let i = lines.length - 1; i >= 0; i--) {
+                        const distance = pointToLineDistance(
+                            mousePos, 
+                            lines[i].startPoint, 
+                            lines[i].endPoint
+                        );
+                        
+                        if (distance < 10) { // 线的删除阈值
+                            lines.splice(i, 1);
+                            redraw();
+                            return;
+                        }
+                    }
+                    break;
+            }
+        }
+        
+        // 处理鼠标移动事件
+        function handleMouseMove(event) {
+            const mousePos = getMousePosition(event);
+            
+            if (currentTool === 'line' && isDrawingLine) {
+                // 显示预览线
+                const adsorbPoint = getAdsorbPoint(mousePos) || mousePos;
+                previewLine = { startPoint, endPoint: adsorbPoint };
+                redraw();
+            }
+        }
+        
+        // 处理鼠标按下事件
+        function handleMouseDown(event) {
+            // 目前不需要额外处理
+        }
+        
+        // 处理鼠标释放事件
+        function handleMouseUp(event) {
+            // 目前不需要额外处理
+        }
+        
+        // 绘制线函数
+        function drawLine(line, color = lineColor, width = lineWidth) {
+            ctx.beginPath();
+            ctx.moveTo(line.startPoint.x, line.startPoint.y);
+            ctx.lineTo(line.endPoint.x, line.endPoint.y);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = width;
+            ctx.stroke();
+        }
+        
+        // 重绘函数
+        function redraw() {
+            // 清除画布
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // 绘制所有线
+            lines.forEach(line => {
+                drawLine(line);
+            });
+            
+            // 绘制预览线
+            if (previewLine) {
+                drawLine(previewLine, previewLineColor, previewLineWidth);
+            }
+            
+            // 绘制所有点
+            points.forEach(point => {
+                ctx.beginPath();
+                ctx.arc(point.x, point.y, point.radius, 0, Math.PI * 2);
+                ctx.fillStyle = (startPoint === point) ? selectedPointColor : pointColor;
+                ctx.fill();
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            });
+        }
+        
+        // 点到线段的距离算法
+        function pointToLineDistance(point, lineStart, lineEnd) {
+            // 线段向量
+            const lineVecX = lineEnd.x - lineStart.x;
+            const lineVecY = lineEnd.y - lineStart.y;
+            
+            // 点到线段起点的向量
+            const pointVecX = point.x - lineStart.x;
+            const pointVecY = point.y - lineStart.y;
+            
+            // 线段长度的平方
+            const lineLengthSq = lineVecX * lineVecX + lineVecY * lineVecY;
+            
+            // 如果线段长度为0，直接返回点到起点的距离
+            if (lineLengthSq === 0) {
+                return Math.hypot(pointVecX, pointVecY);
+            }
+            
+            // 计算投影参数t (点在直线上的投影点到线段起点的距离与线段长度的比值)
+            const t = Math.max(0, Math.min(1, (pointVecX * lineVecX + pointVecY * lineVecY) / lineLengthSq));
+            
+            // 投影点
+            const projectionX = lineStart.x + t * lineVecX;
+            const projectionY = lineStart.y + t * lineVecY;
+            
+            // 计算点到投影点的距离
+            const distanceX = point.x - projectionX;
+            const distanceY = point.y - projectionY;
+            
+            return Math.hypot(distanceX, distanceY);
+        }
+        
+        // 清除画布
+        function clearCanvas() {
+            points.length = 0;
+            lines.length = 0;
+            isDrawingLine = false;
+            startPoint = null;
+            previewLine = null;
+            redraw();
+        }
+        
+        // 初始化应用
+        window.addEventListener('load', initCanvas);
+    </script>
+</body>
+</html>
